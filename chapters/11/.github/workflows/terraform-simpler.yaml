@@ -1,0 +1,23 @@
+name: Terraform-Simpler
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  terraform-apply:
+    uses: "./.github/workflows/terraform-azure.yaml"
+    with:
+      application_name: fleet-ops
+      environment_name: dev
+      terraform_version: 1.5.7
+      terraform_working_directory: ./src/terraform/app
+      terraform_operation: apply
+      terraform_state_resource_group: ${{ vars.BACKEND_RESOURCE_GROUP_NAME }}
+      terraform_state_storage_account: ${{ vars.BACKEND_STORAGE_ACCOUNT_NAME }}
+      terraform_state_storage_container: ${{ vars.BACKEND_STORAGE_CONTAINER_NAME }}
+      arm_tenant_id: ${{ vars.ARM_TENANT_ID }}
+      arm_subscription_id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      arm_client_id: ${{ vars.TERRAFORM_ARM_CLIENT_ID }}
+    secrets:
+      arm_client_secret: ${{ secrets.TERRAFORM_ARM_CLIENT_SECRET }}

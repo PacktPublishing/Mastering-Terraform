@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleetops-frontend
+spec:
+  replicas: 3
+  selector:
+
+    matchLabels:
+      app: fleetops-frontend
+  template:
+    metadata:
+      labels:
+        app: fleetops-frontend
+    spec:
+      containers:
+      - name: fleetops-frontend-container
+        image: acrfleetopsdev.azurecr.io/fleetops-frontend:2023.11.5
+        envFrom:
+        - configMapRef:
+            name: fleetops-frontend-config
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleetops-frontend-service
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 5000
+  selector:
+    app: fleetops-frontend
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fleetops-frontend-config
+data:
+  Backend_Uri: "FOO"
+  DefaultPort: "5000"
+  BackendEndpoint: "http://20.25.168.196"

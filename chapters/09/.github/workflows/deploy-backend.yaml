@@ -1,0 +1,135 @@
+name: Deploy-Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to run tests against'
+        type: environment
+        required: true
+
+env:
+  DOTNET_VERSION: '6.0.401' # The .NET SDK version to use
+  DOTNET_WORKING_DIRECTORY: "./src/dotnet/backend/FleetAPI"
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Install dependencies
+      run: dotnet restore
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+      
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+      
+    - name: Display structure of downloaded files
+      run: ls -R
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Publish
+      run: |
+        pwd
+        ls
+        dotnet publish -c Release -o ./publish ./FleetAPI.csproj
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Generate the Deployment Package
+      run: |
+        zip -r ../deployment.zip .
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}/publish
+      
+    - name: Display structure of downloaded files
+      run: ls -R
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Upload Deployment Package
+      uses: actions/upload-artifact@v2
+      with:
+        name: dotnet-deployment
+        path: ${{ env.DOTNET_WORKING_DIRECTORY }}/deployment.zip
+
+  terraform:
+    needs: [build]
+    runs-on: ubuntu-latest
+    outputs:
+      lambda_function_name: ${{ steps.apply.outputs.lambda_function_name }}
+
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: dotnet-deployment
+        path: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+    
+    - name: Display structure of downloaded files
+      run: ls -R
+
+    - id: setup-terraform
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
+
+    - id: apply
+      name: Terraform Apply
+      env:
+        AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ vars.BACKEND_REGION }}
+        BACKEND_BUCKET_NAME: ${{ vars.BACKEND_BUCKET_NAME }}
+        BACKEND_REGION: ${{ vars.BACKEND_REGION }}
+        BACKEND_KEY: ${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}
+      working-directory: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+      run: |
+        terraform init \
+          -backend-config='bucket='$BACKEND_BUCKET_NAME \
+          -backend-config='region='$BACKEND_REGION \
+          -backend-config='key='$BACKEND_KEY
+          
+        terraform apply -auto-approve
+
+        lambda_function_name=$(terraform output -raw lambda_function_name)
+        echo $lambda_function_name
+        echo "lambda_function_name=$lambda_function_name" >> "$GITHUB_OUTPUT"
+ 
+  deploy:
+    needs: [terraform, build]
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: dotnet-deployment
+      
+      - name: Display structure of downloaded files
+        run: ls -R
+
+      - name: Deploy
+        env:
+          AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ vars.BACKEND_REGION }}
+          FUNCTION_NAME: ${{needs.terraform.outputs.lambda_function_name}}
+        run: |
+          aws lambda update-function-code --function-name $FUNCTION_NAME --zip-file fileb://deployment.zip

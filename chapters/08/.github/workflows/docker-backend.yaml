@@ -1,0 +1,131 @@
+name: Docker-Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to run tests against'
+        type: environment
+        required: true
+
+env:
+  DOTNET_VERSION: '6.0.401' # The .NET SDK version to use
+  DOTNET_WORKING_DIRECTORY: "./src/dotnet/backend/FleetAPI"
+  DOCKER_IMAGE_NAME: "fleetops-backend"
+  DOCKER_WORKING_DIRECTORY: "./src/dotnet/backend"
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Install dependencies
+      run: dotnet restore
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+      
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+      
+    - name: Display structure of downloaded files
+      run: ls -R
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Publish
+      run: |
+        pwd
+        ls
+        dotnet publish ./FleetAPI.csproj -c Release -o ./publish
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Generate the Deployment Package
+      run: |
+        zip -r ../deployment.zip ./
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}/publish
+      
+    - name: Display structure of downloaded files
+      run: ls -R
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Upload Deployment Package
+      uses: actions/upload-artifact@v2
+      with:
+        name: dotnet-deployment
+        path: ${{ env.DOTNET_WORKING_DIRECTORY }}/deployment.zip
+
+  docker:
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - id: setup
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
+
+    - id: terraform
+      name: Terraform Output
+      env:
+        AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        BACKEND_BUCKET_NAME: ${{ vars.BACKEND_BUCKET_NAME }}
+        BACKEND_REGION: ${{ vars.BACKEND_REGION }}
+        BACKEND_KEY: ${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}
+      working-directory: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+      run: |
+        terraform init \
+          -backend-config='bucket='$BACKEND_BUCKET_NAME \
+          -backend-config='region='$BACKEND_REGION \
+          -backend-config='key='$BACKEND_KEY
+
+        terraform apply -refresh-only -auto-approve
+
+        registry_endpoint=$(terraform output -raw backend_repository_url)
+        echo $registry_endpoint
+        echo "registry_endpoint=$registry_endpoint" >> "$GITHUB_OUTPUT"
+
+    - id: image-version
+      name: Generate Version Number
+      run: |
+        echo "version=$(date +'%Y.%m').${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.PRIMARY_REGION }}
+
+    - name: Log in to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Debug output
+      run: |
+        echo "Registry Endpoint: ${{ steps.terraform.outputs.registry_endpoint }}"
+        echo "Version: ${{ steps.image-version.outputs.version }}"
+
+    - name: Build and push Docker image to ACR
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ env.DOCKER_WORKING_DIRECTORY }}
+        push: true
+        tags: ${{ steps.terraform.outputs.registry_endpoint }}:${{ steps.image-version.outputs.version }}

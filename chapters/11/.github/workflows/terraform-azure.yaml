@@ -1,0 +1,82 @@
+name: terraform-azure
+
+on:
+  workflow_call:
+    inputs:
+      application_name:
+        required: true
+        type: string
+      environment_name:
+        required: true
+        type: string
+      terraform_version:
+        required: true
+        type: string
+        default: 1.5.5
+      terraform_working_directory:
+        required: true
+        type: string
+      terraform_operation:
+        required: true
+        type: string
+        default: plan
+      terraform_state_resource_group:
+        required: true
+        type: string
+      terraform_state_storage_account:
+        required: true
+        type: string
+      terraform_state_storage_container:
+        required: true
+        type: string
+      arm_tenant_id:
+        required: true
+        type: string
+      arm_subscription_id:
+        required: true
+        type: string
+      arm_client_id:
+        required: true
+        type: string
+    secrets:
+      arm_client_secret:
+        required: true
+
+jobs:
+
+  terraform-apply:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.terraform_working_directory }}
+        shell: bash
+    env:
+      ARM_TENANT_ID: ${{ inputs.arm_tenant_id }}
+      ARM_SUBSCRIPTION_ID: ${{ inputs.arm_subscription_id }}
+      ARM_CLIENT_ID: ${{ inputs.arm_client_id }}
+      ARM_CLIENT_SECRET: ${{ secrets.arm_client_secret }}
+      TERRAFORM_BACKEND_RESOURCE_GROUP_NAME: ${{ inputs.terraform_state_resource_group }}
+      TERRAFORM_BACKEND_STORAGE_ACCOUNT_NAME: ${{ inputs.terraform_state_storage_account }}
+      TERRAFORM_BACKEND_STORAGE_CONTAINER_NAME: ${{ inputs.terraform_state_storage_container }}
+      TERRAFORM_BACKEND_KEY: ${{ inputs.application_name }}-${{ inputs.environment_name }}
+      TERRAFORM_OPERATION: ${{ inputs.terraform_operation }}
+    environment: ${{ inputs.environment_name }}
+    steps:
+    - uses: actions/checkout@v3
+
+    - id: setup
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@main
+      with:
+        version: ${{ inputs.terraform_version }}
+
+    - id: terraform-operation
+      name: Terraform Operation
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=$TERRAFORM_BACKEND_RESOURCE_GROUP_NAME" \
+          -backend-config="storage_account_name=$TERRAFORM_BACKEND_STORAGE_ACCOUNT_NAME" \
+          -backend-config="container_name=$TERRAFORM_BACKEND_STORAGE_CONTAINER_NAME" \
+          -backend-config="key=$TERRAFORM_BACKEND_KEY"
+          
+        terraform $TERRAFORM_OPERATION -auto-approve

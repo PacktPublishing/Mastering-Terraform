@@ -1,0 +1,6 @@
+**/.terraform.*
+**/.terraform/**
+**/.debug.sh
+**/.debug.tfvars
+**/.terraform/*
+**/.DS_Store

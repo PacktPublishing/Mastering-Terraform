@@ -1,0 +1,38 @@
+name: Terraform-Destroy
+
+on:
+  workflow_dispatch:
+
+env:
+  TERRAFORM_VERSION: '1.5.7'
+  WORKING_DIRECTORY: "./src/terraform"
+
+jobs:
+
+  terraform-destroy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - id: setup
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@main
+      with:
+        version: ${{ env.TERRAFORM_VERSION }}
+
+    - id: destroy
+      name: Terraform Destroy
+      env:
+        AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        BACKEND_BUCKET_NAME: ${{ vars.BUCKET_NAME }}
+        BACKEND_REGION: ${{ vars.BUCKET_REGION }}
+        TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      working-directory: ${{ env.WORKING_DIRECTORY }}
+      run: |
+        terraform init \
+          -backend-config='bucket='$BACKEND_BUCKET_NAME \
+          -backend-config='region='$BACKEND_REGION \
+          -backend-config="key=aws-vm-sample"
+
+        terraform destroy -auto-approve

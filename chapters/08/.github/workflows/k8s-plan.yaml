@@ -1,0 +1,103 @@
+name: k8s-Plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to run tests against'
+        type: environment
+        required: true
+
+env:
+  TERRAFORM_VERSION: '1.5.7'
+
+jobs:
+
+  infra:
+    runs-on: ubuntu-latest
+    outputs:
+      kubernetes_cluster_name: ${{ steps.apply.outputs.kubernetes_cluster_name }}
+      primary_region: ${{ steps.apply.outputs.primary_region }}
+      alb_controller_role: ${{ steps.apply.outputs.alb_controller_role }}
+      workload_identity_role: ${{ steps.apply.outputs.workload_identity_role }}
+
+    environment:
+      name: ${{ inputs.environment }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - id: setup
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+    - id: apply
+      name: Terraform Apply
+      env:
+        AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        BACKEND_BUCKET_NAME: ${{ vars.BACKEND_BUCKET_NAME }}
+        BACKEND_REGION: ${{ vars.BACKEND_REGION }}
+        BACKEND_KEY: ${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}
+      working-directory: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+      run: |
+        terraform init \
+          -backend-config='bucket='$BACKEND_BUCKET_NAME \
+          -backend-config='region='$BACKEND_REGION \
+          -backend-config="key=${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}"
+
+        terraform apply -target "random_shuffle.az" -auto-approve
+        terraform apply -auto-approve
+
+        kubernetes_cluster_name=$(terraform output -raw kubernetes_cluster_name)
+        echo "kubernetes_cluster_name=$kubernetes_cluster_name" >> "$GITHUB_OUTPUT"
+
+        alb_controller_role=$(terraform output -raw alb_controller_role)
+        echo "alb_controller_role=$alb_controller_role" >> "$GITHUB_OUTPUT"
+
+        workload_identity_role=$(terraform output -raw workload_identity_role)
+        echo "workload_identity_role=$workload_identity_role" >> "$GITHUB_OUTPUT"
+
+        primary_region=$(terraform output -raw primary_region)
+        echo "primary_region=$primary_region" >> "$GITHUB_OUTPUT"
+        
+  k8s:
+    runs-on: ubuntu-latest
+    needs: infra
+
+    environment:
+      name: ${{ inputs.environment }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - id: setup
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+    - id: plan
+      name: Terraform Plan
+      env:
+        AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        BACKEND_BUCKET_NAME: ${{ vars.BACKEND_BUCKET_NAME }}
+        BACKEND_REGION: ${{ vars.BACKEND_REGION }}
+        BACKEND_KEY: ${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}
+        TF_VAR_application_name: ${{ vars.APPLICATION_NAME }}
+        TF_VAR_environment_name: ${{ vars.ENVIRONMENT_NAME }}
+        TF_VAR_cluster_name: ${{ needs.infra.outputs.kubernetes_cluster_name }}
+        TF_VAR_primary_region: ${{ needs.infra.outputs.primary_region }}
+        TF_VAR_alb_controller_role: ${{ needs.infra.outputs.alb_controller_role }}
+        TF_VAR_workload_identity_role: ${{ needs.infra.outputs.workload_identity_role }}
+      working-directory: ./src/terraform/k8s
+      run: |
+        terraform init \
+          -backend-config='bucket='$BACKEND_BUCKET_NAME \
+          -backend-config='region='$BACKEND_REGION \
+          -backend-config="key=${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}-k8s"
+          
+        terraform plan
