@@ -1,0 +1,12 @@
+application_name        = "fleet-ops"
+environment_name        = "dev"
+primary_region          = "us-central1"
+frontend_image_name     = "frontend-2023-10-9"
+frontend_machine_type   = "n2-standard-4"
+frontend_instance_count = 2
+backend_image_name      = "backend-2023-10-17"
+backend_instance_type   = "n2-standard-4"
+backend_instance_count  = 2
+domain_name             = "cloud-stack.io"
+network_cidr_block      = "10.0.0.0/22"
+az_count                = 2

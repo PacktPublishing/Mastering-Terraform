@@ -4,3 +4,4 @@
 **/.debug.tfvars
 **/.terraform/*
 **/.DS_Store
+**/gcp-key.json

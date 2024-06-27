@@ -1,0 +1,172 @@
+name: Docker-Frontend
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to run tests against'
+        type: environment
+        required: true
+
+env:
+  DOTNET_VERSION: '6.0.401' # The .NET SDK version to use
+  DOTNET_WORKING_DIRECTORY: "./src/dotnet/frontend/FleetPortal"
+  DOCKER_IMAGE_NAME: "fleetops-frontend"
+  DOCKER_WORKING_DIRECTORY: "./src/dotnet/frontend"
+
+jobs:
+
+  terraform-apply:
+    runs-on: ubuntu-latest
+
+    outputs:
+      project_id: ${{ steps.apply.outputs.project_id }}
+      primary_region: ${{ steps.apply.outputs.primary_region }}
+      container_registry: ${{ steps.apply.outputs.container_registry }}
+      container_registry_endpoint: ${{ steps.apply.outputs.container_registry_endpoint }}
+
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - id: setup
+      name: Setup `terraform`
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
+
+    - name: Create Secret File for Backend
+      env:
+        GOOGLE_BACKEND_CREDENTIALS: ${{ secrets.GOOGLE_BACKEND_CREDENTIALS }}
+      working-directory: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+      run: |
+        # Create a local file with the secret value
+        echo -n "$GOOGLE_BACKEND_CREDENTIALS" > gcp-backend.json
+
+    - name: Create Secret File for Terraform
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+      working-directory: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+      run: |
+        # Create a local file with the secret value
+        echo -n "$GOOGLE_APPLICATION_CREDENTIALS" > gcp-terraform.json
+
+    - id: apply
+      name: Terraform Apply
+      env:
+        GOOGLE_BACKEND_CREDENTIALS: gcp-backend.json
+        GOOGLE_APPLICATION_CREDENTIALS: gcp-terraform.json
+        BACKEND_BUCKET_NAME: ${{ vars.BACKEND_BUCKET_NAME }}
+        BACKEND_KEY: ${{ vars.APPLICATION_NAME }}-${{ vars.ENVIRONMENT_NAME }}
+        TF_VAR_gcp_organization: ${{ vars.GCP_ORGANIZATION_ID }}
+      working-directory: ${{ vars.TERRAFORM_WORKING_DIRECTORY }}
+      run: |
+        terraform init \
+          -backend-config='bucket='$BACKEND_BUCKET_NAME \
+          -backend-config='prefix='$BACKEND_KEY
+
+        terraform apply -auto-approve
+
+        project_id=$(terraform output -raw project_id)
+        echo "project_id=$project_id" >> "$GITHUB_OUTPUT"
+
+        primary_region=$(terraform output -raw primary_region)
+        echo "primary_region=$primary_region" >> "$GITHUB_OUTPUT"
+
+        container_registry_endpoint=$(terraform output -raw container_registry_endpoint)
+        echo "container_registry_endpoint=$container_registry_endpoint" >> "$GITHUB_OUTPUT"
+
+        container_registry=$(terraform output -raw frontend_registry)
+        echo "container_registry=$container_registry" >> "$GITHUB_OUTPUT"
+    
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Install dependencies
+      run: dotnet restore
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+      
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+      
+    - name: Display structure of downloaded files
+      run: ls -R
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Publish
+      run: |
+        pwd
+        ls
+        dotnet publish ./FleetPortal.csproj -c Release -o ./publish
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Generate the Deployment Package
+      run: |
+        zip -r ../deployment.zip ./
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}/publish
+      
+    - name: Display structure of downloaded files
+      run: ls -R
+      working-directory: ${{ env.DOTNET_WORKING_DIRECTORY }}
+
+    - name: Upload Deployment Package
+      uses: actions/upload-artifact@v2
+      with:
+        name: dotnet-deployment
+        path: ${{ env.DOTNET_WORKING_DIRECTORY }}/deployment.zip
+
+  docker:
+    needs: [build, terraform-apply]
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ github.event.inputs.environment }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - id: image-version
+      name: Generate Version Number
+      run: |
+        echo "version=$(date +'%Y.%m').${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Google Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ needs.terraform-apply.outputs.container_registry_endpoint }}
+        username: _json_key
+        password: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+    - name: Build and push Docker image to ACR
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ env.DOCKER_WORKING_DIRECTORY }}
+        push: true
+        tags: ${{ needs.terraform-apply.outputs.container_registry_endpoint }}/${{ needs.terraform-apply.outputs.project_id }}/${{ needs.terraform-apply.outputs.container_registry }}/${{ needs.terraform-apply.outputs.container_registry }}:${{ steps.image-version.outputs.version }}
+
+#us-central1-docker.pkg.dev/fleet-ops-dev-ci3m88hs/frontend:2024.06.13
+#us-central1-docker.pkg.dev/fleet-ops-dev-ci3m88hs/frontend
+#Error: buildx failed with: ERROR: failed to solve: failed to push : unexpected status from HEAD request to https://us-central1-docker.pkg.dev/v2/fleet-ops-dev-ci3m88hs/frontend/manifests/sha256:0a661bc65d5782b79bc77a5c749afc4233d57b3049a93fb723e3257a6ca9dfb4: 400 Bad Request
+
+
+#HOST-NAME/PROJECT-ID/REPOSITORY/IMAGE
+#HOST-NAME=${{ needs.terraform-apply.outputs.container_registry_endpoint }}
+#/
+#PROJECT-ID=${{ needs.terraform-apply.outputs.project_id }}
+#/
+#REPOSITORY=${{ needs.terraform-apply.outputs.container_registry }}:${{ steps.image-version.outputs.version }}
