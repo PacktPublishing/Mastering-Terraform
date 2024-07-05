@@ -1,0 +1,3 @@
+# Chapter Summary
+
+In this chapter, we looked at Terraform’s built-in capabilities for importing existing resources into Terraform state using imperative and declarative approaches. While the built-in import capabilities lack any sort of code generation, we looked at a couple of open-source tools that analyzed existing environments and generated HashiCorp Configuration Language code to manage the resources and provided for them to be imported into the state. We discussed the relevant trade-offs between these different import techniques and when to consider each, which should help you decide the best course of action for your organization and teams. In the next chapter, we’ll look at how to manage and operate existing environments using Terraform.
